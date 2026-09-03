@@ -13,16 +13,13 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
-        submodules: recursive  # 必須拉取子模組，否則會報 exit code 1
+        submodules: recursive
         fetch-depth: 0
 
     - name: Setup .NET 8 SDK
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
-
-    - name: Restore Dependencies
-      run: dotnet restore DS4Windows.sln
 
     - name: Build and Publish DS4Windows
       run: dotnet publish DS4Windows/DS4Windows.csproj -c Release -r win-x64 --self-contained false -o ./publish
