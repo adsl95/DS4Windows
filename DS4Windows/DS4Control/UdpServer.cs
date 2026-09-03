@@ -630,7 +630,7 @@ namespace DS4Windows
                 {
                     // Listen on all IPV4 interfaces. 
                     // Remote client connections allowed. If the local network is not "safe" then may not be a good idea, because at the moment incoming connections are not authenticated in any way
-                    udpListenIPAddress = IPAddress.Any;                    
+                    udpListenIPAddress = IPAddress.Loopback;                    
                 }
                 else
                 {

@@ -41,6 +41,23 @@ namespace DS4WinWPF
     [System.Security.SuppressUnmanagedCodeSecurity]
     public partial class App : Application
     {
+        public App()
+    {
+        // 1. 攔截背景 Task 未處理異常（防加速器切網卡崩潰）
+        TaskScheduler.UnobservedTaskException += (sender, args) =>
+        {
+            args.SetObserved();
+        };
+
+        // 2. 攔截全域未處理例外
+        AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+        {
+            // 靜默忽略，防止程序被系統強制關閉
+        };
+
+        // 3. 強制 WPF 採用軟體渲染（防顯卡切換/休眠恢復 Direct3D 崩潰）
+        RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+    }
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
