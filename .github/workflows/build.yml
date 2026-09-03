@@ -27,6 +27,19 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
+    - name: Patch .NET 8 AssemblyResolve in Source Code
+      run: |
+        Write-Host "Patching Assembly.LoadFile -> Assembly.LoadFrom for .NET 8 ALC compatibility..."
+        $csFiles = Get-ChildItem -Recurse -Filter "*.cs"
+        foreach ($file in $csFiles) {
+            $content = Get-Content $file.FullName -Raw -Encoding UTF8
+            if ($content -match "Assembly\.LoadFile") {
+                Write-Host "Found Assembly.LoadFile in: $($file.FullName)"
+                $updated = $content -replace "Assembly\.LoadFile", "Assembly.LoadFrom"
+                [System.IO.File]::WriteAllText($file.FullName, $updated, [System.Text.Encoding]::UTF8)
+            }
+        }
+
     - name: Restore NuGet Packages
       run: |
         $sln = Get-ChildItem -Recurse -Filter *.sln | Select-Object -First 1
@@ -48,9 +61,9 @@ jobs:
             msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
-    - name: Collect Output Files and Enforce Lang Directory Structure
+    - name: Collect Output Files and Move Language Packs to Lang
       run: |
-        # 1. 清理與建立 publish/Lang 目錄
+        # 1. 清理與建立 publish/Lang 資料夾
         if (Test-Path ./publish) { Remove-Item ./publish -Recurse -Force }
         New-Item -ItemType Directory -Force -Path ./publish/Lang | Out-Null
 
@@ -67,7 +80,7 @@ jobs:
         robocopy "$dir" ./publish /E /NJH /NJS /NDL /NC /NS
         if ($LASTEXITCODE -le 7) { $global:LASTEXITCODE = 0 }
 
-        # 4. 掃描根目錄下的所有語系資料夾，完全剪下移動至 publish/Lang/
+        # 4. 掃描根目錄下的所有語系資料夾，移動至 publish/Lang/
         $cultureDirs = Get-ChildItem -Path ./publish -Directory | Where-Object {
             $_.Name -ne "Lang" -and (
                 (Get-ChildItem -Path $_.FullName -Filter "*.resources.dll" -Recurse).Count -gt 0 -or
@@ -85,7 +98,7 @@ jobs:
             Remove-Item -Path $cDir.FullName -Recurse -Force
         }
 
-        # 5. 確保 Lang/ 目錄內建立 .NET 8 相容別名 (zh-TW <-> zh-Hant, zh-CN <-> zh-Hans)
+        # 5. 在 Lang/ 內建立 .NET 8 語系雙向別名
         if (Test-Path ./publish/Lang/zh-TW) {
             Copy-Item -Path ./publish/Lang/zh-TW -Destination ./publish/Lang/zh-Hant -Recurse -Force
         }
