@@ -48,11 +48,11 @@ jobs:
             msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
-    - name: Collect Output Files and Enforce Lang Directory
+    - name: Collect Output Files into Lang Directory (with .NET 8 Locale Compatibility)
       run: |
-        # 1. 清理與建立 publish 資料夾
+        # 1. 清理與建立 publish/Lang 目錄
         if (Test-Path ./publish) { Remove-Item ./publish -Recurse -Force }
-        New-Item -ItemType Directory -Force -Path ./publish | Out-Null
+        New-Item -ItemType Directory -Force -Path ./publish/Lang | Out-Null
 
         # 2. 尋找 DS4Windows.exe 的編譯輸出目錄
         $exe = Get-ChildItem -Recurse -Filter "DS4Windows.exe" | Where-Object { $_.FullName -like "*bin*Release*" -or $_.FullName -like "*bin*x64*" } | Select-Object -First 1
@@ -63,39 +63,26 @@ jobs:
         $dir = $exe.DirectoryName
         Write-Host "Found build output at: $dir"
 
-        # 3. 將編譯輸出檔案完整複製至 publish
-        robocopy "$dir" ./publish /E /NJH /NJS /NDL /NC /NS | Out-Null
+        # 3. 複製主程式與相依庫到 publish 根目錄（排除語系資料夾）
+        robocopy "$dir" ./publish /E /XD zh* ja* de* es* fr* ru* /NJH /NJS /NDL /NC /NS | Out-Null
 
-        # 4. 建立 ./publish/Lang 資料夾
-        $langPath = "./publish/Lang"
-        if (-not (Test-Path $langPath)) {
-            New-Item -ItemType Directory -Force -Path $langPath | Out-Null
-        }
-
-        # 5. 若專案源碼中含有 Lang 原始資料夾，同步至 publish/Lang
-        $langSource = Get-ChildItem -Recurse -Directory | Where-Object { $_.Name -ieq "Lang" -and $_.FullName -notlike "*bin*" -and $_.FullName -notlike "*obj*" -and $_.FullName -notlike "*publish*" } | Select-Object -First 1
-        if ($langSource) {
-            Write-Host "Syncing source Lang folder from: $($langSource.FullName)"
-            robocopy "$($langSource.FullName)" "$langPath" /E /NJH /NJS /NDL /NC /NS | Out-Null
-        }
-
-        # 6. 【核心修復】精確識別根目錄下的所有語系資料夾並「搬移」至 Lang/ 目錄，徹底清空根目錄殘留
-        $cultureDirs = Get-ChildItem -Path ./publish -Directory | Where-Object { 
-            $_.Name -ne "Lang" -and (
-                (Get-ChildItem -Path $_.FullName -Filter "*.resources.dll" -Recurse).Count -gt 0 -or
-                $_.Name -match "^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$"
-            )
+        # 4. 尋找所有語系資料夾並複製到 publish/Lang/
+        $cultureDirs = Get-ChildItem -Path "$dir" -Directory | Where-Object {
+            (Get-ChildItem -Path $_.FullName -Filter "*.resources.dll" -Recurse).Count -gt 0
         }
 
         foreach ($cDir in $cultureDirs) {
-            $destDir = Join-Path $langPath $cDir.Name
-            Write-Host "Moving culture directory '$($cDir.Name)' from root into '$destDir'..."
-            
-            if (Test-Path $destDir) {
-                Copy-Item -Path "$($cDir.FullName)\*" -Destination $destDir -Recurse -Force
-                Remove-Item -Path $cDir.FullName -Recurse -Force
-            } else {
-                Move-Item -Path $cDir.FullName -Destination $destDir -Force
+            Write-Host "Syncing culture directory '$($cDir.Name)' into ./publish/Lang/"
+            $targetDir = "./publish/Lang/$($cDir.Name)"
+            Copy-Item -Path "$($cDir.FullName)" -Destination "./publish/Lang/" -Recurse -Force
+
+            # 5. 【核心修復】補全 .NET 8 語系名稱相容性（雙向別名複製）
+            if ($cDir.Name -ieq "zh-TW") {
+                Write-Host "Creating .NET 8 alias: ./publish/Lang/zh-Hant"
+                Copy-Item -Path "$($cDir.FullName)" -Destination "./publish/Lang/zh-Hant" -Recurse -Force
+            } elseif ($cDir.Name -ieq "zh-CN") {
+                Write-Host "Creating .NET 8 alias: ./publish/Lang/zh-Hans"
+                Copy-Item -Path "$($cDir.FullName)" -Destination "./publish/Lang/zh-Hans" -Recurse -Force
             }
         }
 
