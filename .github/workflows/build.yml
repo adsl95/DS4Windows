@@ -27,20 +27,105 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Patch Source Code for .NET 8 AssemblyLoadContext Compatibility
+    - name: Inject LangResolver ModuleInitializer for .NET 8
       run: |
-        Write-Host "Patching AppDomain.CurrentDomain.AssemblyResolve for .NET 8 ALC Default Context..."
-        $csFiles = Get-ChildItem -Recurse -Filter "*.cs"
-        foreach ($file in $csFiles) {
-            $content = Get-Content $file.FullName -Raw -Encoding UTF8
-            if ($content -match "AssemblyResolve" -or $content -match "Assembly\.LoadFile" -or $content -match "Assembly\.LoadFrom") {
-                Write-Host "Found target C# file: $($file.FullName)"
-                
-                # 將 Assembly.LoadFile / LoadFrom 替換為 .NET 8 的 AssemblyLoadContext.Default.LoadFromAssemblyPath
-                $patched = [regex]::Replace($content, 'Assembly\.LoadFile\s*\(([^)]+)\)', 'System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(System.IO.Path.GetFullPath($1))')
-                $patched = [regex]::Replace($patched, 'Assembly\.LoadFrom\s*\(([^)]+)\)', 'System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(System.IO.Path.GetFullPath($1))')
-                
-                [System.IO.File]::WriteAllText($file.FullName, $patched, [System.Text.Encoding]::UTF8)
+        Write-Host "Searching for main WPF project file..."
+        $proj = Get-ChildItem -Recurse -Filter "DS4WinWPF.csproj" | Select-Object -First 1
+        if (-not $proj) {
+            $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Where-Object { $_.Name -like "*WPF*" -or $_.Name -like "*DS4*" } | Select-Object -First 1
+        }
+        
+        $projDir = $proj.DirectoryName
+        $resolverPath = Join-Path $projDir "LangResolver.cs"
+        Write-Host "Injecting LangResolver.cs into: $resolverPath"
+
+        # 寫入可以在 CLR 啟動最早期運行的 LangResolver.cs
+        @'
+        using System;
+        using System.IO;
+        using System.Reflection;
+        using System.Runtime.CompilerServices;
+        using System.Runtime.Loader;
+
+        namespace DS4WinWPF
+        {
+            internal static class LangResolver
+            {
+                [ModuleInitializer]
+                internal static void Initialize()
+                {
+                    try
+                    {
+                        AssemblyLoadContext.Default.Resolving += (context, assemblyName) =>
+                        {
+                            if (assemblyName.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return ResolveSatelliteAssembly(assemblyName.Name, assemblyName.CultureName, path => context.LoadFromAssemblyPath(path));
+                            }
+                            return null;
+                        };
+
+                        AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                        {
+                            var asmName = new AssemblyName(args.Name);
+                            if (asmName.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return ResolveSatelliteAssembly(asmName.Name, asmName.CultureName, path => AssemblyLoadContext.Default.LoadFromAssemblyPath(path));
+                            }
+                            return null;
+                        };
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                private static Assembly ResolveSatelliteAssembly(string name, string culture, Func<string, Assembly> loader)
+                {
+                    if (string.IsNullOrEmpty(culture)) return null;
+
+                    string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                    string[] cultureCandidates = new string[]
+                    {
+                        culture,
+                        culture.Equals("zh-TW", StringComparison.OrdinalIgnoreCase) ? "zh-Hant" : culture,
+                        culture.Equals("zh-Hant", StringComparison.OrdinalIgnoreCase) ? "zh-TW" : culture,
+                        culture.Equals("zh-CN", StringComparison.OrdinalIgnoreCase) ? "zh-Hans" : culture,
+                        culture.Equals("zh-Hans", StringComparison.OrdinalIgnoreCase) ? "zh-CN" : culture
+                    };
+
+                    foreach (var c in cultureCandidates)
+                    {
+                        string targetPath = Path.Combine(baseDir, "Lang", c, name + ".dll");
+                        if (File.Exists(targetPath))
+                        {
+                            try
+                            {
+                                return loader(Path.GetFullPath(targetPath));
+                            }
+                            catch
+                            {
+                            }
+                        }
+                    }
+                    return null;
+                }
+            }
+        }
+        '@ | Out-File -FilePath $resolverPath -Encoding utf8
+
+        # 確保 csproj 包含編譯項目（相容舊版 XML 格式 csproj）
+        [xml]$projXml = Get-Content $proj.FullName
+        if ($projXml.Project.ItemGroup) {
+            $hasCompile = Get-Content $proj.FullName | Select-String "LangResolver.cs"
+            if (-not $hasCompile) {
+                Write-Host "Adding LangResolver.cs reference to csproj..."
+                $itemGroup = $projXml.CreateElement("ItemGroup", $projXml.Project.NamespaceURI)
+                $compile = $projXml.CreateElement("Compile", $projXml.Project.NamespaceURI)
+                $compile.SetAttribute("Include", "LangResolver.cs")
+                $itemGroup.AppendChild($compile) | Out-Null
+                $projXml.Project.AppendChild($itemGroup) | Out-Null
+                $projXml.Save($proj.FullName)
             }
         }
 
@@ -65,13 +150,11 @@ jobs:
             msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
-    - name: Collect Output Files and Enforce Lang Directory Structure
+    - name: Collect Output Files and Enforce Lang Directory
       run: |
-        # 1. 清理與建立 publish/Lang 資料夾
         if (Test-Path ./publish) { Remove-Item ./publish -Recurse -Force }
         New-Item -ItemType Directory -Force -Path ./publish/Lang | Out-Null
 
-        # 2. 尋找 DS4Windows.exe 的編譯輸出目錄
         $exe = Get-ChildItem -Recurse -Filter "DS4Windows.exe" | Where-Object { $_.FullName -like "*bin*Release*" -or $_.FullName -like "*bin*x64*" } | Select-Object -First 1
         if (-not $exe) {
             Write-Error "DS4Windows.exe not found after build!"
@@ -80,11 +163,10 @@ jobs:
         $dir = $exe.DirectoryName
         Write-Host "Found build output at: $dir"
 
-        # 3. 複製編譯產物，並修正 robocopy 傳回碼 (1-7 為正常複製成功)
         robocopy "$dir" ./publish /E /NJH /NJS /NDL /NC /NS
         if ($LASTEXITCODE -le 7) { $global:LASTEXITCODE = 0 }
 
-        # 4. 掃描根目錄下的所有語系資料夾，移動至 publish/Lang/
+        # 將所有語系資料夾移動至 publish/Lang/
         $cultureDirs = Get-ChildItem -Path ./publish -Directory | Where-Object {
             $_.Name -ne "Lang" -and (
                 (Get-ChildItem -Path $_.FullName -Filter "*.resources.dll" -Recurse).Count -gt 0 -or
@@ -94,7 +176,6 @@ jobs:
 
         foreach ($cDir in $cultureDirs) {
             $targetLangDir = "./publish/Lang/$($cDir.Name)"
-            Write-Host "Moving culture '$($cDir.Name)' into '$targetLangDir'..."
             if (-not (Test-Path $targetLangDir)) {
                 New-Item -ItemType Directory -Force -Path $targetLangDir | Out-Null
             }
@@ -102,19 +183,11 @@ jobs:
             Remove-Item -Path $cDir.FullName -Recurse -Force
         }
 
-        # 5. 在 Lang/ 內建立 .NET 8 語系雙向別名，防止 CultureInfo 找不到目錄
-        if (Test-Path ./publish/Lang/zh-TW) {
-            Copy-Item -Path ./publish/Lang/zh-TW -Destination ./publish/Lang/zh-Hant -Recurse -Force
-        }
-        if (Test-Path ./publish/Lang/zh-Hant) {
-            Copy-Item -Path ./publish/Lang/zh-Hant -Destination ./publish/Lang/zh-TW -Recurse -Force
-        }
-        if (Test-Path ./publish/Lang/zh-CN) {
-            Copy-Item -Path ./publish/Lang/zh-CN -Destination ./publish/Lang/zh-Hans -Recurse -Force
-        }
-        if (Test-Path ./publish/Lang/zh-Hans) {
-            Copy-Item -Path ./publish/Lang/zh-Hans -Destination ./publish/Lang/zh-CN -Recurse -Force
-        }
+        # 建立雙向別名，確保雙重保險
+        if (Test-Path ./publish/Lang/zh-TW) { Copy-Item -Path ./publish/Lang/zh-TW -Destination ./publish/Lang/zh-Hant -Recurse -Force }
+        if (Test-Path ./publish/Lang/zh-Hant) { Copy-Item -Path ./publish/Lang/zh-Hant -Destination ./publish/Lang/zh-TW -Recurse -Force }
+        if (Test-Path ./publish/Lang/zh-CN) { Copy-Item -Path ./publish/Lang/zh-CN -Destination ./publish/Lang/zh-Hans -Recurse -Force }
+        if (Test-Path ./publish/Lang/zh-Hans) { Copy-Item -Path ./publish/Lang/zh-Hans -Destination ./publish/Lang/zh-CN -Recurse -Force }
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
