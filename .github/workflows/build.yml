@@ -21,8 +21,19 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
-    - name: Build and Publish DS4Windows
-      run: dotnet publish DS4Windows/DS4Windows.csproj -c Release -r win-x64 --self-contained false -o ./publish
+    - name: Auto-Find and Publish DS4Windows
+      run: |
+        $proj = Get-ChildItem -Recurse -Filter *.csproj | Where-Object { $_.Name -like "*WPF*" -or $_.Name -like "*DS4Windows*" } | Select-Object -First 1
+        if (-not $proj) {
+            $proj = Get-ChildItem -Recurse -Filter *.csproj | Select-Object -First 1
+        }
+        if ($proj) {
+            Write-Host "Found project file: $($proj.FullName)"
+            dotnet publish $proj.FullName -c Release -r win-x64 --self-contained false -o ./publish
+        } else {
+            Write-Error "No .csproj file found in repository!"
+            exit 1
+        }
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
