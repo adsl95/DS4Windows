@@ -12,6 +12,9 @@ jobs:
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive  # 必須拉取子模組，否則會報 exit code 1
+        fetch-depth: 0
 
     - name: Setup .NET 8 SDK
       uses: actions/setup-dotnet@v4
@@ -22,7 +25,7 @@ jobs:
       run: dotnet restore DS4Windows.sln
 
     - name: Build and Publish DS4Windows
-      run: dotnet publish DS4Windows/DS4Windows.csproj -c Release -o ./publish --no-restore
+      run: dotnet publish DS4Windows/DS4Windows.csproj -c Release -r win-x64 --self-contained false -o ./publish
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
