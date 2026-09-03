@@ -48,19 +48,39 @@ jobs:
             msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
-    - name: Collect Output Files (Preserve Subdirectories)
+    - name: Collect Output Files and Sync Lang Directory
       run: |
         if (Test-Path ./publish) { Remove-Item ./publish -Recurse -Force }
-        New-Item -ItemType Directory -Force -Path ./publish
+        New-Item -ItemType Directory -Force -Path ./publish | Out-Null
 
+        # 1. 尋找 DS4Windows.exe 的編譯輸出目錄
         $exe = Get-ChildItem -Recurse -Filter "DS4Windows.exe" | Where-Object { $_.FullName -like "*bin*Release*" -or $_.FullName -like "*bin*x64*" } | Select-Object -First 1
-        if ($exe) {
-            $dir = $exe.DirectoryName
-            Write-Host "Found build output at: $dir"
-            Get-ChildItem -Path "$dir" | Copy-Item -Destination ./publish -Recurse -Force
-        } else {
+        if (-not $exe) {
             Write-Error "DS4Windows.exe not found after build!"
             exit 1
+        }
+        $dir = $exe.DirectoryName
+        Write-Host "Found build output at: $dir"
+
+        # 2. 使用 robocopy 完整複製輸出目錄（保留完整子目錄結構）
+        robocopy "$dir" ./publish /E /NJH /NJS /NDL /NC /NS | Out-Null
+
+        # 3. 確保 publish/Lang 目錄存在
+        New-Item -ItemType Directory -Force -Path ./publish/Lang | Out-Null
+
+        # 4. 若源碼庫中有 Lang 原始資料夾，將內容複製至 publish/Lang
+        $langSource = Get-ChildItem -Recurse -Directory | Where-Object { $_.Name -ieq "Lang" -and $_.FullName -notlike "*bin*" -and $_.FullName -notlike "*obj*" } | Select-Object -First 1
+        if ($langSource) {
+            Write-Host "Found source Lang directory at: $($langSource.FullName)"
+            robocopy "$($langSource.FullName)" ./publish/Lang /E /NJH /NJS /NDL /NC /NS | Out-Null
+        }
+
+        # 5. 掃描所有包含 .resources.dll 的語系資料夾，同步一份進 publish/Lang/
+        $cultureDirs = Get-ChildItem -Path ./publish -Directory | Where-Object { $_.Name -ne "Lang" -and (Get-ChildItem -Path $_.FullName -Filter "*.resources.dll").Count -gt 0 }
+        foreach ($cDir in $cultureDirs) {
+            Write-Host "Syncing culture directory '$($cDir.Name)' into ./publish/Lang/"
+            New-Item -ItemType Directory -Force -Path "./publish/Lang/$($cDir.Name)" | Out-Null
+            Copy-Item -Path "$($cDir.FullName)\*" -Destination "./publish/Lang/$($cDir.Name)" -Recurse -Force
         }
 
     - name: Upload Artifact
