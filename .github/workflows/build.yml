@@ -61,8 +61,12 @@ jobs:
             exit 1
         }
 
-    - name: Upload Artifact
+    - name: Compress Publish Directory to ZIP
+      run: |
+        Compress-Archive -Path ./publish/* -DestinationPath ./DS4Windows-x64.zip -Force
+
+    - name: Upload Zip Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: DS4Windows-Fixed-Release
-        path: ./publish/
+        name: DS4Windows-x64-Release
+        path: ./DS4Windows-x64.zip
