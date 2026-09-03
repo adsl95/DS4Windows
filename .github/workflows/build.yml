@@ -27,31 +27,31 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Restore NuGet Packages (Legacy & Modern)
+    - name: Restore NuGet Packages
       run: |
         $sln = Get-ChildItem -Recurse -Filter *.sln | Select-Object -First 1
         if ($sln) {
             Write-Host "Restoring solution via NuGet: $($sln.FullName)"
             nuget restore $sln.FullName
         } else {
-            Write-Host "Restoring repository via NuGet..."
             nuget restore
         }
 
-    - name: Build Solution with MSBuild
+    - name: Build Solution with MSBuild (x64)
       run: |
         $sln = Get-ChildItem -Recurse -Filter *.sln | Select-Object -First 1
         if ($sln) {
-            msbuild $sln.FullName /p:Configuration=Release /p:Platform="Any CPU"
+            Write-Host "Building solution: $($sln.FullName)"
+            msbuild $sln.FullName /p:Configuration=Release /p:Platform="x64"
         } else {
             $proj = Get-ChildItem -Recurse -Filter DS4WinWPF.csproj | Select-Object -First 1
-            msbuild $proj.FullName /p:Configuration=Release /p:Platform="Any CPU"
+            msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
     - name: Collect Output Files
       run: |
         New-Item -ItemType Directory -Force -Path ./publish
-        $exe = Get-ChildItem -Recurse -Filter "DS4Windows.exe" | Where-Object { $_.FullName -like "*bin*Release*" } | Select-Object -First 1
+        $exe = Get-ChildItem -Recurse -Filter "DS4Windows.exe" | Where-Object { $_.FullName -like "*bin*Release*" -or $_.FullName -like "*bin*x64*" } | Select-Object -First 1
         if ($exe) {
             $dir = $exe.DirectoryName
             Write-Host "Found build output at: $dir"
