@@ -27,16 +27,20 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Patch .NET 8 AssemblyResolve in Source Code
+    - name: Patch Source Code for .NET 8 AssemblyLoadContext Compatibility
       run: |
-        Write-Host "Patching Assembly.LoadFile -> Assembly.LoadFrom for .NET 8 ALC compatibility..."
+        Write-Host "Patching AppDomain.CurrentDomain.AssemblyResolve for .NET 8 ALC Default Context..."
         $csFiles = Get-ChildItem -Recurse -Filter "*.cs"
         foreach ($file in $csFiles) {
             $content = Get-Content $file.FullName -Raw -Encoding UTF8
-            if ($content -match "Assembly\.LoadFile") {
-                Write-Host "Found Assembly.LoadFile in: $($file.FullName)"
-                $updated = $content -replace "Assembly\.LoadFile", "Assembly.LoadFrom"
-                [System.IO.File]::WriteAllText($file.FullName, $updated, [System.Text.Encoding]::UTF8)
+            if ($content -match "AssemblyResolve" -or $content -match "Assembly\.LoadFile" -or $content -match "Assembly\.LoadFrom") {
+                Write-Host "Found target C# file: $($file.FullName)"
+                
+                # 將 Assembly.LoadFile / LoadFrom 替換為 .NET 8 的 AssemblyLoadContext.Default.LoadFromAssemblyPath
+                $patched = [regex]::Replace($content, 'Assembly\.LoadFile\s*\(([^)]+)\)', 'System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(System.IO.Path.GetFullPath($1))')
+                $patched = [regex]::Replace($patched, 'Assembly\.LoadFrom\s*\(([^)]+)\)', 'System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(System.IO.Path.GetFullPath($1))')
+                
+                [System.IO.File]::WriteAllText($file.FullName, $patched, [System.Text.Encoding]::UTF8)
             }
         }
 
@@ -61,7 +65,7 @@ jobs:
             msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
-    - name: Collect Output Files and Move Language Packs to Lang
+    - name: Collect Output Files and Enforce Lang Directory Structure
       run: |
         # 1. 清理與建立 publish/Lang 資料夾
         if (Test-Path ./publish) { Remove-Item ./publish -Recurse -Force }
@@ -98,7 +102,7 @@ jobs:
             Remove-Item -Path $cDir.FullName -Recurse -Force
         }
 
-        # 5. 在 Lang/ 內建立 .NET 8 語系雙向別名
+        # 5. 在 Lang/ 內建立 .NET 8 語系雙向別名，防止 CultureInfo 找不到目錄
         if (Test-Path ./publish/Lang/zh-TW) {
             Copy-Item -Path ./publish/Lang/zh-TW -Destination ./publish/Lang/zh-Hant -Recurse -Force
         }
