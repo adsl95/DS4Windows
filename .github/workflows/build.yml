@@ -48,25 +48,23 @@ jobs:
             msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
-    - name: Collect Output Files
+    - name: Collect Output Files (Preserve Subdirectories)
       run: |
+        if (Test-Path ./publish) { Remove-Item ./publish -Recurse -Force }
         New-Item -ItemType Directory -Force -Path ./publish
+
         $exe = Get-ChildItem -Recurse -Filter "DS4Windows.exe" | Where-Object { $_.FullName -like "*bin*Release*" -or $_.FullName -like "*bin*x64*" } | Select-Object -First 1
         if ($exe) {
             $dir = $exe.DirectoryName
             Write-Host "Found build output at: $dir"
-            Copy-Item -Path "$dir\*" -Destination ./publish -Recurse -Force
+            Get-ChildItem -Path "$dir" | Copy-Item -Destination ./publish -Recurse -Force
         } else {
             Write-Error "DS4Windows.exe not found after build!"
             exit 1
         }
 
-    - name: Compress Publish Directory to ZIP
-      run: |
-        Compress-Archive -Path ./publish/* -DestinationPath ./DS4Windows-x64.zip -Force
-
-    - name: Upload Zip Artifact
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: DS4Windows-x64-Release
-        path: ./DS4Windows-x64.zip
+        path: ./publish/
