@@ -1,0 +1,31 @@
+name: Build DS4Windows (.NET 8)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET 8 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore Dependencies
+      run: dotnet restore DS4Windows.sln
+
+    - name: Build and Publish DS4Windows
+      run: dotnet publish DS4Windows/DS4Windows.csproj -c Release -o ./publish --no-restore
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: DS4Windows-Fixed-Release
+        path: ./publish/
