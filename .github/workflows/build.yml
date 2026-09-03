@@ -1,42 +1,59 @@
-name: Build DS4Windows (.NET 8)
+name: Build DS4Windows
 
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 允許在 GitHub 網頁點擊按鈕手動觸發編譯
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-latest # 必須使用 Windows 容器才能編譯 WPF
 
     steps:
-    - name: Checkout Code
+    # 1. 拉取主程式碼並「強制遞迴下載所有子模組」
+    - name: Checkout repository with submodules
       uses: actions/checkout@v4
       with:
-        submodules: recursive
+        submodules: 'recursive' # 關鍵設定：確保下載 Nefarius, SharpOSC 等子模組
         fetch-depth: 0
 
-    - name: Setup .NET 8 SDK
+    # 2. 如果子模組使用了 SSH 網址，將其轉為 HTTPS 以防權限錯誤
+    - name: Fix Submodule URLs (HTTPS)
+      run: |
+        git config --global url."https://github.com/".insteadOf "git@github.com:"
+        git submodule update --init --recursive
+
+    # 3. 安裝 .NET SDK (DS4Windows 較新版本需 .NET 8.0)
+    - name: Setup .NET 8.0
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
 
-    - name: Auto-Find and Publish DS4Windows
+    # 4. 全域還原 Solution (.sln) 所有依賴項目
+    - name: Restore dependencies
       run: |
-        $proj = Get-ChildItem -Recurse -Filter *.csproj | Where-Object { $_.Name -like "*WPF*" -or $_.Name -like "*DS4Windows*" } | Select-Object -First 1
-        if (-not $proj) {
-            $proj = Get-ChildItem -Recurse -Filter *.csproj | Select-Object -First 1
-        }
-        if ($proj) {
-            Write-Host "Found project file: $($proj.FullName)"
-            dotnet publish $proj.FullName -c Release -r win-x64 --self-contained false -o ./publish
+        $sln = Get-ChildItem -Recurse -Filter *.sln | Select-Object -First 1
+        if ($sln) {
+            dotnet restore $sln.FullName
         } else {
-            Write-Error "No .csproj file found in repository!"
-            exit 1
+            dotnet restore
         }
 
-    - name: Upload Artifact
+    # 5. 編譯並發布專案
+    - name: Build and Publish DS4Windows
+      run: |
+        $proj = Get-ChildItem -Recurse -Filter DS4WinWPF.csproj | Select-Object -First 1
+        if (-not $proj) {
+            $proj = Get-ChildItem -Recurse -Filter *.csproj | Where-Object { $_.Name -like "*WPF*" -or $_.Name -like "*DS4Windows*" } | Select-Object -First 1
+        }
+        Write-Host "Publishing project: $($proj.FullName)"
+        dotnet publish $proj.FullName -c Release -r win-x64 --self-contained false -o ./publish
+
+    # 6. 打包編譯好的成品並提供在網頁端下載
+    - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: DS4Windows-Fixed-Release
-        path: ./publish/
+        name: DS4Windows-Release-x64
+        path: ./publish/*
