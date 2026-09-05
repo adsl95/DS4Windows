@@ -542,35 +542,57 @@ namespace DS4Windows
         }
 
         private void ReceiveCallback(IAsyncResult iar)
+{
+    byte[] localMsg = null;
+    EndPoint clientEP = new IPEndPoint(IPAddress.Any, 0);
+
+    try
+    {
+        Socket recvSock = (Socket)iar.AsyncState;
+        if (recvSock == null || !running) return;
+
+        // 1. 讀取封包數據與發送端 IP（保留原邏輯）
+        int msgLen = recvSock.EndReceiveFrom(iar, ref clientEP);
+
+        if (msgLen > 0)
         {
-            byte[] localMsg = null;
-            EndPoint clientEP = new IPEndPoint(IPAddress.Any, 0);
-
-            try
-            {
-                //Get the received message.
-                Socket recvSock = (Socket)iar.AsyncState;
-                int msgLen = recvSock.EndReceiveFrom(iar, ref clientEP);
-
-                localMsg = new byte[msgLen];
-                Array.Copy(recvBuffer, localMsg, msgLen);
-            }
-            catch (SocketException)
-            {
-                if (running)
-                {
-                    ResetUDPConn();
-                }
-            }
-            catch (Exception /*e*/) { }
-
-            //Start another receive as soon as we copied the data
-            StartReceive();
-
-            //Process the data if its valid
-            if (localMsg != null)
-                ProcessIncoming(localMsg, (IPEndPoint)clientEP);
+            localMsg = new byte[msgLen];
+            Array.Copy(recvBuffer, localMsg, msgLen);
         }
+    }
+    catch (SocketException)
+    {
+        // 攔截加速器背景重連/網卡刷閃導致的 Socket 異常，防止崩潰
+        if (running)
+        {
+            try { ResetUDPConn(); } catch { }
+        }
+    }
+    catch (ObjectDisposedException) { }
+    catch (Exception) { }
+    finally
+    {
+        // 2. 確保無論網路是否異常，只要服務還在運行就重啟下一輪接收
+        try
+        {
+            if (running)
+            {
+                StartReceive();
+            }
+        }
+        catch { }
+    }
+
+    // 3. 執行數據解析（整合原代碼的 ProcessIncoming 方法）
+    if (localMsg != null && localMsg.Length > 0)
+    {
+        try
+        {
+            ProcessIncoming(localMsg, (IPEndPoint)clientEP);
+        }
+        catch { }
+    }
+}
         private void StartReceive()
         {
             try
