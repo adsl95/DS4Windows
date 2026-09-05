@@ -39,7 +39,7 @@ jobs:
         $resolverPath = Join-Path $projDir "LangResolver.cs"
         Write-Host "Injecting LangResolver.cs into: $resolverPath"
 
-        # 寫入可以在 CLR 啟動最早期運行的 LangResolver.cs
+        # SDK 專案會自動包含目錄下的所有 .cs 檔，直接寫入檔案即可，切勿修改 .csproj
         @'
         using System;
         using System.IO;
@@ -58,21 +58,13 @@ jobs:
                     {
                         AssemblyLoadContext.Default.Resolving += (context, assemblyName) =>
                         {
-                            if (assemblyName.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
-                            {
-                                return ResolveSatelliteAssembly(assemblyName.Name, assemblyName.CultureName, path => context.LoadFromAssemblyPath(path));
-                            }
-                            return null;
+                            return ResolveSatelliteAssembly(context, assemblyName);
                         };
 
                         AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
                         {
                             var asmName = new AssemblyName(args.Name);
-                            if (asmName.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
-                            {
-                                return ResolveSatelliteAssembly(asmName.Name, asmName.CultureName, path => AssemblyLoadContext.Default.LoadFromAssemblyPath(path));
-                            }
-                            return null;
+                            return ResolveSatelliteAssembly(AssemblyLoadContext.Default, asmName);
                         };
                     }
                     catch
@@ -80,31 +72,52 @@ jobs:
                     }
                 }
 
-                private static Assembly ResolveSatelliteAssembly(string name, string culture, Func<string, Assembly> loader)
+                private static Assembly ResolveSatelliteAssembly(AssemblyLoadContext context, AssemblyName assemblyName)
                 {
-                    if (string.IsNullOrEmpty(culture)) return null;
+                    if (assemblyName == null || string.IsNullOrEmpty(assemblyName.Name)) return null;
+                    if (!assemblyName.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase)) return null;
+
+                    string culture = assemblyName.CultureName;
+                    if (string.IsNullOrEmpty(culture) && assemblyName.CultureInfo != null)
+                    {
+                        culture = assemblyName.CultureInfo.Name;
+                    }
 
                     string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                    string[] cultureCandidates = new string[]
+                    var cultureCandidates = new System.Collections.Generic.List<string>();
+                    
+                    if (!string.IsNullOrEmpty(culture)) cultureCandidates.Add(culture);
+
+                    // 處理語系代碼別名映射
+                    if (string.Equals(culture, "zh-TW", StringComparison.OrdinalIgnoreCase) || string.Equals(culture, "zh-Hant", StringComparison.OrdinalIgnoreCase))
                     {
-                        culture,
-                        culture.Equals("zh-TW", StringComparison.OrdinalIgnoreCase) ? "zh-Hant" : culture,
-                        culture.Equals("zh-Hant", StringComparison.OrdinalIgnoreCase) ? "zh-TW" : culture,
-                        culture.Equals("zh-CN", StringComparison.OrdinalIgnoreCase) ? "zh-Hans" : culture,
-                        culture.Equals("zh-Hans", StringComparison.OrdinalIgnoreCase) ? "zh-CN" : culture
-                    };
+                        cultureCandidates.Add("zh-TW");
+                        cultureCandidates.Add("zh-Hant");
+                        cultureCandidates.Add("zh-HK");
+                    }
+                    else if (string.Equals(culture, "zh-CN", StringComparison.OrdinalIgnoreCase) || string.Equals(culture, "zh-Hans", StringComparison.OrdinalIgnoreCase))
+                    {
+                        cultureCandidates.Add("zh-CN");
+                        cultureCandidates.Add("zh-Hans");
+                    }
 
                     foreach (var c in cultureCandidates)
                     {
-                        string targetPath = Path.Combine(baseDir, "Lang", c, name + ".dll");
-                        if (File.Exists(targetPath))
+                        string langFolder = Path.Combine(baseDir, "Lang", c);
+                        if (Directory.Exists(langFolder))
                         {
-                            try
+                            // 優先比對精確檔名 (例如 DS4WinWPF.resources.dll)
+                            string targetPath = Path.Combine(langFolder, assemblyName.Name + ".dll");
+                            if (File.Exists(targetPath))
                             {
-                                return loader(Path.GetFullPath(targetPath));
+                                try { return context.LoadFromAssemblyPath(Path.GetFullPath(targetPath)); } catch {}
                             }
-                            catch
+
+                            // 備用比對：讀取該目錄下的第一個 .resources.dll
+                            var files = Directory.GetFiles(langFolder, "*.resources.dll");
+                            if (files.Length > 0)
                             {
+                                try { return context.LoadFromAssemblyPath(Path.GetFullPath(files[0])); } catch {}
                             }
                         }
                     }
@@ -113,21 +126,6 @@ jobs:
             }
         }
         '@ | Out-File -FilePath $resolverPath -Encoding utf8
-
-        # 確保 csproj 包含編譯項目（相容舊版 XML 格式 csproj）
-        [xml]$projXml = Get-Content $proj.FullName
-        if ($projXml.Project.ItemGroup) {
-            $hasCompile = Get-Content $proj.FullName | Select-String "LangResolver.cs"
-            if (-not $hasCompile) {
-                Write-Host "Adding LangResolver.cs reference to csproj..."
-                $itemGroup = $projXml.CreateElement("ItemGroup", $projXml.Project.NamespaceURI)
-                $compile = $projXml.CreateElement("Compile", $projXml.Project.NamespaceURI)
-                $compile.SetAttribute("Include", "LangResolver.cs")
-                $itemGroup.AppendChild($compile) | Out-Null
-                $projXml.Project.AppendChild($itemGroup) | Out-Null
-                $projXml.Save($proj.FullName)
-            }
-        }
 
     - name: Restore NuGet Packages
       run: |
@@ -183,7 +181,7 @@ jobs:
             Remove-Item -Path $cDir.FullName -Recurse -Force
         }
 
-        # 建立雙向別名，確保雙重保險
+        # 建立雙向別名目錄，確保 WPF 與系統語系名稱皆可自動對應
         if (Test-Path ./publish/Lang/zh-TW) { Copy-Item -Path ./publish/Lang/zh-TW -Destination ./publish/Lang/zh-Hant -Recurse -Force }
         if (Test-Path ./publish/Lang/zh-Hant) { Copy-Item -Path ./publish/Lang/zh-Hant -Destination ./publish/Lang/zh-TW -Recurse -Force }
         if (Test-Path ./publish/Lang/zh-CN) { Copy-Item -Path ./publish/Lang/zh-CN -Destination ./publish/Lang/zh-Hans -Recurse -Force }
