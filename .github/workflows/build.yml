@@ -148,6 +148,64 @@ jobs:
             msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64"
         }
 
+    - name: Collect CsWin32 Generated Source
+      shell: pwsh
+      run: |
+        Write-Host "Searching for CsWin32 generated source files..."
+
+        $generatedRoot = Get-ChildItem -Path . -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.FullName -match '\\obj\\' -and
+                $_.Name -eq 'generated'
+            }
+
+        if (-not $generatedRoot) {
+            Write-Host "No generated directory found under obj."
+            Write-Host "Listing possible generated source files..."
+
+            $generatedFiles = Get-ChildItem -Path . -Recurse -File -Filter "*.cs" -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.FullName -match '\\obj\\' -and
+                    (
+                        $_.Name -like "*PInvoke*" -or
+                        $_.Name -like "*Windows.Win32*" -or
+                        $_.FullName -match 'CsWin32'
+                    )
+                }
+
+            if ($generatedFiles) {
+                New-Item -ItemType Directory -Force -Path "./CsWin32-Generated" | Out-Null
+
+                foreach ($file in $generatedFiles) {
+                    Copy-Item $file.FullName "./CsWin32-Generated/" -Force
+                    Write-Host "Copied generated file: $($file.FullName)"
+                }
+            }
+            else {
+                Write-Error "No CsWin32 generated source files were found."
+                exit 1
+            }
+        }
+        else {
+            New-Item -ItemType Directory -Force -Path "./CsWin32-Generated" | Out-Null
+
+            foreach ($dir in $generatedRoot) {
+                Write-Host "Found generated directory:"
+                Write-Host $dir.FullName
+
+                Copy-Item $dir.FullName "./CsWin32-Generated/" -Recurse -Force
+            }
+        }
+
+        Write-Host "CsWin32 generated source collection complete."
+
+    - name: Upload CsWin32 Generated Source
+      uses: actions/upload-artifact@v4
+      with:
+        name: CsWin32-Generated-Source
+        path: ./CsWin32-Generated
+        if-no-files-found: error
+
     - name: Collect Output Files and Enforce Lang Directory
       run: |
         if (Test-Path ./publish) { Remove-Item ./publish -Recurse -Force }
