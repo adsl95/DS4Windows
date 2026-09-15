@@ -1,0 +1,56 @@
+name: DS4Windows Fix1 Build
+
+on:
+  push:
+    branches:
+      - repair/fix1-hid-read-pin
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build X64
+        run: >
+          dotnet publish .\DS4Windows\DS4WinWPF.csproj
+          -c Release
+          /p:Platform=x64
+          /p:AssemblyVersion=3.9.9
+          /p:FileVersion=3.9.9
+          /p:Version=3.9.9-fix1
+          -o .\bin\x64\Release\output
+
+      - name: Post-Build X64
+        run: >
+          python .\utils\post-build.py
+          .\bin\x64\Release\output
+          .
+          3.9.9-fix1
+
+      - name: Upload X64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DS4Windows-3.9.9-Fix1-x64
+          path: .\bin\x64\Release\DS4Windows_3.9.9-fix1_x64.zip
+          if-no-files-found: error
+          retention-days: 30
