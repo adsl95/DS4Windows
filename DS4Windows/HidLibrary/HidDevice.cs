@@ -163,24 +163,48 @@ namespace DS4Windows
             }
         }
 
-        public unsafe ReadStatus ReadFile(Span<byte> inputBuffer, uint timeout = uint.MaxValue)
+public unsafe ReadStatus ReadFile(Span<byte> inputBuffer, uint timeout = uint.MaxValue)
+{
+    SafeReadHandle ??= OpenHandle(_devicePath, true, false);
+
+    using AutoResetEvent wait = new(false);
+
+    var ov = new NativeOverlapped
+    {
+        EventHandle = wait.SafeWaitHandle.DangerousGetHandle()
+    };
+
+    fixed (byte* buffer = inputBuffer)
+    {
+        if (PInvoke.ReadFile(
+            (HANDLE)SafeReadHandle.DangerousGetHandle(),
+            buffer,
+            (uint)inputBuffer.Length,
+            null,
+            &ov))
         {
-            SafeReadHandle ??= OpenHandle(_devicePath, true, false);
-
-            using AutoResetEvent wait = new(false);
-
-            var ov = new NativeOverlapped { EventHandle = wait.SafeWaitHandle.DangerousGetHandle() };
-
-            if (PInvoke.ReadFile(SafeReadHandle, inputBuffer, null, &ov))
-                return ReadStatus.Success;
-
-            if (Marshal.GetLastWin32Error() != (uint)WIN32_ERROR.ERROR_IO_PENDING) return ReadStatus.ReadError;
-
-            if (!PInvoke.GetOverlappedResultEx(SafeReadHandle, ov, out _, timeout, true))
-                return ReadStatus.ReadError;
-
             return ReadStatus.Success;
         }
+
+        if (Marshal.GetLastWin32Error() !=
+            (uint)WIN32_ERROR.ERROR_IO_PENDING)
+        {
+            return ReadStatus.ReadError;
+        }
+
+        if (!PInvoke.GetOverlappedResultEx(
+            SafeReadHandle,
+            ov,
+            out _,
+            timeout,
+            true))
+        {
+            return ReadStatus.ReadError;
+        }
+
+        return ReadStatus.Success;
+    }
+}
 
         public bool WriteOutputReportViaControl(byte[] outputBuffer)
         {
