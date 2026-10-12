@@ -213,22 +213,76 @@ public unsafe ReadStatus ReadFile(Span<byte> inputBuffer, uint timeout = uint.Ma
             return NativeMethods.HidD_SetOutputReport(SafeReadHandle, outputBuffer, outputBuffer.Length);
         }
 
-        public unsafe bool WriteOutputReportViaInterrupt(byte[] outputBuffer, int timeout)
+        
+public unsafe bool WriteOutputReportViaInterrupt(byte[] outputBuffer, int timeout)
+{
+    if (outputBuffer == null)
+        return false;
+
+    SafeReadHandle ??= OpenHandle(_devicePath, true, false);
+
+    using AutoResetEvent wait = new(false);
+
+    var ov = new NativeOverlapped
+    {
+        EventHandle = wait.SafeWaitHandle.DangerousGetHandle()
+    };
+
+    uint timeoutMs = timeout < 0 ? uint.MaxValue : (uint)timeout;
+
+    // Keep the managed buffer pinned until the overlapped I/O
+    // has actually completed, including cancellation.
+    fixed (byte* buffer = outputBuffer)
+    {
+        if (PInvoke.WriteFile(
+            (HANDLE)SafeReadHandle.DangerousGetHandle(),
+            buffer,
+            (uint)outputBuffer.Length,
+            null,
+            &ov))
         {
-                SafeReadHandle ??= OpenHandle(_devicePath, true, false);
-                using AutoResetEvent wait = new(false);
-                var ov = new NativeOverlapped { EventHandle = wait.SafeWaitHandle.DangerousGetHandle() };
-
-                if (PInvoke.WriteFile(SafeReadHandle, outputBuffer, null, &ov))
-                    return true;
-
-                if (Marshal.GetLastWin32Error() != (uint)WIN32_ERROR.ERROR_IO_PENDING) return false;
-
-                if (!PInvoke.GetOverlappedResult(SafeReadHandle, ov, out _, true))
-                    return false;
-
-                return true;
+            // Synchronous completion: no pending I/O remains.
+            return true;
         }
+
+        if (Marshal.GetLastWin32Error() !=
+            (uint)WIN32_ERROR.ERROR_IO_PENDING)
+        {
+            // The operation was not submitted as pending I/O.
+            return false;
+        }
+
+        if (PInvoke.GetOverlappedResultEx(
+            SafeReadHandle,
+            ov,
+            out _,
+            timeoutMs,
+            false))
+        {
+            return true;
+        }
+
+        // The wait timed out or the operation completed with an error.
+        // Cancel only this specific overlapped operation.
+        NativeMethods.CancelIoEx(
+            SafeReadHandle.DangerousGetHandle(),
+            (IntPtr)(&ov));
+
+        // Do not release the buffer or OVERLAPPED structure while
+        // the operation may still be using them.
+        // A cancelled operation normally completes with an error;
+        // the return value here is intentionally not used.
+        PInvoke.GetOverlappedResultEx(
+            SafeReadHandle,
+            ov,
+            out _,
+            uint.MaxValue,
+            false);
+
+        return false;
+    }
+}
+
 
         private SafeFileHandle OpenHandle(string devicePathName, bool isExclusive, bool enumerate)
         {
