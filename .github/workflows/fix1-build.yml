@@ -38,7 +38,7 @@ jobs:
           /p:Platform=x64
           /p:AssemblyVersion=3.9.9
           /p:FileVersion=3.9.9
-          /p:Version=3.9.9-fix1
+          /p:Version=3.9.9-fix2
           -o .\bin\x64\Release\output
 
       - name: Post-Build X64
@@ -46,12 +46,12 @@ jobs:
           python .\utils\post-build.py
           .\bin\x64\Release\output
           .
-          3.9.9-fix1
+          3.9.9-fix2
 
       - name: Upload X64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DS4Windows-3.9.9-Fix1-x64
-          path: .\bin\x64\Release\DS4Windows_3.9.9-fix1_x64.zip
+          name: DS4Windows-3.9.9-Fix2-x64
+          path: .\bin\x64\Release\DS4Windows_3.9.9-fix2_x64.zip
           if-no-files-found: error
           retention-days: 30
