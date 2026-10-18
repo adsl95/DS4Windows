@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - repair/fix1-hid-read-pin
-      - fix2-hid-write-buffer
+      - repair/fix2-hid-write-buffer
   workflow_dispatch:
 
 permissions:
